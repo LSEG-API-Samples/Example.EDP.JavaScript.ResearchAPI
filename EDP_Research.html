@@ -1,0 +1,327 @@
+﻿<html>
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+
+    <!-- Elektron WebSocket interface -->
+    <script type="text/javascript" src="ERTRESTController.js"></script>
+    <script type="text/javascript" src="https://sdk.amazonaws.com/js/aws-sdk-2.1.12.min.js"></script>
+
+    <style>
+        .my-custom-scrollbar {
+            position: relative;
+            height: 600px;
+            overflow: auto;
+        }
+
+        .table-wrapper-scroll-y {
+            display: block;
+        }
+    </style>
+           
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.2.1/css/bootstrap.min.css" integrity="sha384-GJzZqFGwb1QTTN6wy59ffF1BuGJpLSa9DkKMp0DgiMDm4iYMj70gZWKYbI706tWS" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.6.3/css/all.css" integrity="sha384-UHRtZLI+pbxtHCWp1t77Bi1L4ZtiqrqD80Kn4Z8NTSRyMA2Fd33n5dQ8lWUE00s/" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://unpkg.com/bootstrap-table@1.14.2/dist/bootstrap-table.min.css">
+
+</head>
+
+<body>
+    <header>
+        <h1>Elektron Data Platform - Alerts Research API</h1>
+        <div style="overflow-y: scroll; height:200px;" id="logger"></div>
+    </header>
+    <div class="table-wrapper-scroll-y my-custom-scrollbar">
+        <table class="table table-bordered table-striped mb-0" id="alert-table">
+            <thead>
+                <tr>
+                    <th data-field="id">Document ID</th>
+                    <th data-field="name">Headline</th>
+                    <th data-field="price">Download</th>
+                </tr>
+            </thead>
+        </table>
+    </div>
+    <script>
+        let edpController;
+        let cloudCredential;
+        let credential = {
+            'username': '<EDP Username>',  // Username
+            'password': '<EDP Password>',  // Password
+            'uuid': '<EDP User UUID>'      // User UUID
+        };
+
+        (function () {
+            // EDP Authentication
+            edpController = new ERTRESTController();
+
+            // Authenticate with EDP...
+            edpController.get_access_token(credential);
+
+            //***********************************************************************************
+            // ERTRESTController.onStatus
+            //
+            // Capture all ERTRESTController status messages.
+            // EDP/ERT uses OAuth 2.0 authentication and requires clients to use access tokens to
+            // retrieve streaming content.  In addition, EDP/ERT requires clients to continuously
+            // refresh the access token to continue uninterrupted service.
+            //
+            // The following callback will capture the events related to retrieving and
+            // continuously updating the tokens in order to provide the streaming interface these
+            // details to maintain uninterrupted service.
+            // 
+            // This callback is also used for events related to response from EDP services.
+            //***********************************************************************************
+            edpController.onStatus((eventCode, msg) => {
+                let status = edpController.status;
+                switch (eventCode) {
+                    case status.getToken: // Get Access token from EDP (first authentication case)
+                        statuslog("Authenticated to Elektron Data Platform ...");
+                        // Delete all subscription for user
+                        edpController.unsubscribeToResearch();
+                        break;
+
+                    case status.getRefreshToken: // Get Access token form EDP (re-refresh Token case)
+                        statuslog("Elektron Data Platform Authentication Refresh success.  Refreshing ERT stream...");
+                        break;
+
+                    case status.authenError: // Get Authentication fail error form EDP
+                        statuslog("Elektron Data Platform Authentication failed.", msg);
+                        break;
+
+                    case status.getUnsubscribe: // Delete Alert subscrciptions for user
+                        statuslog("EDP Alert Research unsubscription for existing one success. ");
+                        // Create subscription
+                        edpController.subscribeToResearch(credential.uuid);
+                        break;
+
+                    case status.getUnsubscribeError: // Failed to delete Alert subscrciptions for user
+                        statuslog("EDP Alert Research unsubscription failed.", msg);
+                        break;
+
+                    case status.getSubscribe: // Subscribe for Research Alert
+                        statuslog("EDP Alert Research subscription success..." + ", SubscriptionID: " + msg.subscriptionID);
+                        // Get Cloud Credential for given endpoint
+                        edpController.getCloudCredential(msg.endpoint);
+                        break;
+
+                    case status.getSubscribeError: // Failed to subscribe Research
+                        statuslog("EDP Alert Research subscription failed.", msg);
+                        break;
+
+                    case status.getCloudCredential: // Get Cloud Credential for specific SQS queue.
+                        statuslog("Cloud credential retrieval success. for QueueUrl: " + msg.queueURL);
+                        // Store Crendential information for queue access and message decryption
+                        cloudCredential = msg;
+
+                        statuslog("Start Pulling messsage from SQS...")
+                        pullingFromSQS();
+                        break;
+
+                    case status.getCloudCredentialError: // Failed to get Cloud Credential
+                        statuslog("EDP Alert Research Cloud credential retrieval failed.", msg);
+                        break;
+
+                    case status.getDocumentUrl: // Get CPN URL for document retrieval
+                        statuslog("EDP Alert Document Cloud URL retrieval success., ID: " + msg.request.documentId + ", Format: " + msg.request.format, msg);
+                        // Once CPN URL is 
+                        downloadFile(msg.signedUrl);
+                        break;
+
+                    case status.getDocumentUrlError: // Failed to get document URL.
+                        statuslog("EDP Alert Document Cloud URL retrieval failed.", msg);
+                        break;
+
+                    case status.renewCloudCredential: // Get new Cloud Crendential, when the existing one is expired.
+                        statuslog("EDP Alert Research Cloud credential renew success.");
+                        cloudCredential = msg;
+                        break;
+
+                    case status.renewCloudCredentialError: 
+                        statuslog("EDP Alert Research Cloud credential renew failed.", msg);
+                        break;
+                }
+            });
+        })();
+
+        function statuslog(message, error = '') {
+            let loggerRef;
+            if (error == '') {
+                loggerRef = document.getElementById('logger');
+
+                var msg = document.createElement('div');
+                msg.classList.add("log");
+                msg.innerHTML = '<p>' + message + '</p>';
+            } else {
+                loggerRef = document.getElementById('logger');
+
+                var msg = document.createElement('b');
+                msg.classList.add("log");
+                msg.innerHTML = '<p>' + message + ':' + JSON.stringify(error["error"]) + '</p>';
+            }
+            loggerRef.appendChild(msg);
+            console.log(message, error);
+        }
+
+        function convertStringToArrayBufferView(str) {
+            var bytes = new Uint8Array(str.length);
+            for (var iii = 0; iii < str.length; iii++) {
+                bytes[iii] = str.charCodeAt(iii);
+            }
+
+            return bytes;
+        }
+
+        function downloadFile(signedUrl) {
+            var link = document.createElement('a');
+            document.body.appendChild(link);
+            link.href = signedUrl;
+            link.target = "_blank"
+            link.click();
+            link.remove();
+        }
+
+        function getDocumentUrl(uID, docID, type) {
+            edpController.getDocumentUrl(uID, docID, type);
+        }
+
+        function addRow(data) {
+
+            if (data.payload.docID == 0) {
+                statuslog("Receiving DocumentID=0, disregard the message");
+                return;
+            } 
+            // Get a reference to the table
+            let tableRef = document.getElementById('alert-table');
+
+            // Insert a row at the end of the table
+            let newRow = tableRef.insertRow(-1);
+
+            // Insert a cell in the row at index 0
+            let idCell = newRow.insertCell(-1);
+
+            // Append a text node to the cell
+            let docIDText = document.createTextNode(data.payload.docID);
+            idCell.appendChild(docIDText);
+
+            // Insert a cell in the row at index 0
+            let headlineCell = newRow.insertCell(-1);
+
+            // Append a text node to the cell
+            let headlineText = document.createTextNode(data.payload.headline);
+            headlineCell.appendChild(headlineText);
+
+            let downloadCell = newRow.insertCell(-1);
+            let fileDownload = document.createElement("BUTTON");
+            fileDownload.innerHTML = "Download File";
+            fileDownload.onclick = fileDownload.addEventListener('click', function () {
+                getDocumentUrl(credential.uuid, data.payload.docID, "pdf");
+            });
+            downloadCell.appendChild(fileDownload);
+
+            let jsonDownload = document.createElement("BUTTON");
+            jsonDownload.innerHTML = "Download JSON";
+            jsonDownload.onclick = jsonDownload.addEventListener('click', function () {
+                getDocumentUrl(credential.uuid, data.payload.docID, "text");
+            });
+
+            downloadCell.appendChild(jsonDownload);
+        }
+
+        async function decrypt(key, message) {
+            var pw = atob(key);
+            var ciphertext = atob(message);
+
+            var cipher = convertStringToArrayBufferView(ciphertext);
+            var encpw = convertStringToArrayBufferView(pw);
+
+            var GCM_AAD_LENGTH = 16
+            var GCM_NONCE_LENGTH = 12
+
+            var aad = cipher.slice(0, GCM_AAD_LENGTH);
+            var nonce = aad.slice(-GCM_NONCE_LENGTH);
+            var encMessage = cipher.slice(GCM_AAD_LENGTH);
+            const alg = { name: 'AES-GCM', iv: nonce };
+
+            const cykey = await crypto.subtle.importKey('raw', encpw, alg, false, ['encrypt', 'decrypt']);
+
+            const plainBuffer = await crypto.subtle.decrypt({
+                name: "AES-GCM",
+                iv: nonce,
+                additionalData: aad
+            }, cykey, encMessage);
+
+            let decoded = new TextDecoder().decode(plainBuffer);
+            //Convert JSON string to object
+            console.log(decoded.toString());
+            let decryptedData = JSON.parse(decoded.toString());
+            return decryptedData;
+        }
+
+        function pullingFromSQS() {
+            // Configure AWS SDK with cloud credential
+            AWS.config.update({
+                "accessKeyId": cloudCredential.accessKeyId, "secretAccessKey": cloudCredential.secretKey, "region": "us-east-1", "sessionToken": cloudCredential.sessionToken
+            });
+
+            // Create an SQS service object
+            var sqs = new AWS.SQS({ apiVersion: '2012-11-05' });
+
+            // Configure queue's URL
+            var queueURL = cloudCredential.queueURL;
+
+            var params = {
+                AttributeNames: [
+                    "SentTimestamp"
+                ],
+                MaxNumberOfMessages: 1,
+                MessageAttributeNames: [
+                    "All"
+                ],
+                QueueUrl: queueURL,
+                VisibilityTimeout: 20,
+                WaitTimeSeconds: 3
+            };
+
+            console.log("Receiving message...");
+            // Pull message from SQS queue
+            sqs.receiveMessage(params, function (err, data) {
+                if (err) {
+                    statuslog("Receive Error", err);
+                    edpController.renewCloudCredential(cloudCredential.queueURL);
+                } else if (data.Messages.length != 0) {
+                    var messages = data.Messages;
+                    messages.forEach(function (element) {
+
+                        // decrypt message with crytography key received once subscription is created.
+                        cryptographyKey = edpController.subscribe_obj.cryptographyKey;
+                        decrypt(cryptographyKey, element.Body)
+                            .then(messageBody => {
+                                console.log("Message has been successfully received and decrypted", messageBody);
+                                //put the decrypted message to table.
+                                addRow(messageBody);
+                            }).catch(error => {
+                                console.log("Failed to decrypt message", error)
+                            })
+
+                        // delete pulled message from the queue
+                        var deleteParams = {
+                            QueueUrl: queueURL,
+                            ReceiptHandle: element.ReceiptHandle
+                        };
+                        sqs.deleteMessage(deleteParams, function (err, data) {
+                            if (err) {
+                                console.log("Delete Error", err);
+                            } else {
+                                console.log("Message Deleted", data);
+                            }
+                        });
+                    });
+                }
+                //Continue on pulling message from queue.
+                pullingFromSQS();
+
+            });
+        };
+
+    </script>
+</body>
+</html>
