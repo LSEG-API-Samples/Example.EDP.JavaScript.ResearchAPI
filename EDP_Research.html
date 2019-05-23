@@ -122,7 +122,7 @@
                         break;
 
                     case status.getDocumentUrl: // Get CPN URL for document retrieval
-                        statuslog("EDP Alert Document Cloud URL retrieval success., ID: " + msg.request.documentId + ", Format: " + msg.request.format, msg);
+                        statuslog("EDP Alert Document Cloud URL retrieval success., ID: " + msg.request.documentId + ", Format: " + msg.request.format);
                         // Once CPN URL is 
                         downloadFile(msg.signedUrl);
                         break;
