@@ -44,9 +44,6 @@ const data_research_category_URL = '/data/research';
 const document_endpoint_URL = '/documents/';
 const document_category_version = '/v2';
 
-
-//https://api.refinitiv.com/data/research/v1/documents/85207215?format=text&userID=GENTC-25943
-
 var research_subscription_url = edp_hostname + alert_category_URL + alert_category_version + subscription_endpoint_URL;
 var cloud_credential_url = edp_hostname + cloud_credential_category_URL + cloud_credential_version + endpoint_URL;
 var research_document_url = edp_hostname + data_research_category_URL + document_category_version + document_endpoint_URL;
